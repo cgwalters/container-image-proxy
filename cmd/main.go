@@ -22,6 +22,7 @@ import (
 )
 
 var Version = ""
+var quiet bool
 var defaultUserAgent = "ostree-container-backend/" + Version
 
 type proxyHandler struct {
@@ -124,6 +125,9 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	err := h.implRequest(w, imgref, reqtype, ref)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
+		if !quiet {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+		}
 		w.Write([]byte(err.Error()))
 		return
 	}
@@ -158,7 +162,6 @@ func (rw SockResponseWriter) WriteHeader(statusCode int) {
 
 func run() error {
 	var version bool
-	var quiet bool
 	var sockFd int
 	var portNum int
 
