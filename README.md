@@ -16,9 +16,17 @@ updates, but we don't want to involve the [containers/image](github.com/containe
 storage layer.
 
 What we *do* want from the containers ecosystem is support for things like
-signatures and offline mirroring
+signatures and offline mirroring.
 
-Another theoretical use case could be something like [krustlet](https://github.com/deislabs/krustlet).
+Forgetting things like ostree exist for a second - imagine that you wanted to 
+encapsulate a set of Debian/RPM/etc packages inside
+a container image to ship for package-based operating systems.  You could use this to stream
+out the layer containing those packages and extract them directly, rather than serializing
+everything to disk in the `containers/storage` storage, only to copy it out again and delete the first.
+
+Another theoretical use case could be something like [krustlet](https://github.com/deislabs/krustlet),
+which fetches WebAssembly blobs inside containers.  Here again, we don't want to involve
+`containers/storage`.
 
 # Status
 
