@@ -196,6 +196,9 @@ func run() error {
 		for {
 			req, err := http.ReadRequest(bufr)
 			if err != nil {
+				if err == io.EOF {
+					return nil
+				}
 				return err
 			}
 			resp := SockResponseWriter{
