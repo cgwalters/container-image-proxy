@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/containers/image/v5/docker"
@@ -26,8 +27,20 @@ var quiet bool
 var defaultUserAgent = "ostree-container-backend/" + Version
 
 type proxyHandler struct {
-	cache  types.BlobInfoCache
-	sysctx *types.SystemContext
+	cache    types.BlobInfoCache
+	sysctx   *types.SystemContext
+	cachedir *string
+}
+
+func (h *proxyHandler) serveFile(w http.ResponseWriter, f *os.File) error {
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	blobSize := uint64(st.Size())
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", blobSize))
+	_, err = io.Copy(w, f)
+	return err
 }
 
 func (h *proxyHandler) implRequest(w http.ResponseWriter, imgname, reqtype, ref string) error {
@@ -75,9 +88,21 @@ func (h *proxyHandler) implRequest(w http.ResponseWriter, imgname, reqtype, ref 
 			return err
 		}
 	} else if reqtype == "blobs" {
+		var d digest.Digest
 		d, err := digest.Parse(ref)
 		if err != nil {
 			return err
+		}
+		if h.cachedir != nil {
+			var f *os.File
+			f, err = os.Open(filepath.Join(*h.cachedir, ref))
+			if err != nil {
+				if err != os.ErrNotExist {
+					return err
+				}
+			} else {
+				return h.serveFile(w, f)
+			}
 		}
 		r, blobSize, err := imgsrc.GetBlob(ctx, types.BlobInfo{Digest: d, Size: -1}, h.cache)
 		if err != nil {
@@ -187,6 +212,10 @@ func run() error {
 		sysctx: sysCtx,
 	}
 
+	if cachedir, ok := os.LookupEnv("CONTAINER_IMAGE_PROXY_CACHEDIR"); ok {
+		handler.cachedir = &cachedir
+	}
+
 	if sockFd != -1 {
 		fd := os.NewFile(uintptr(sockFd), "sock")
 		defer fd.Close()
@@ -238,7 +267,7 @@ func run() error {
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "%v", err)
+		fmt.Fprintf(os.Stderr, "error: %v", err)
 		os.Exit(1)
 	}
 }
