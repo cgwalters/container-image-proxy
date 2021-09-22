@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -33,11 +32,12 @@ type proxyHandler struct {
 	sysctx *types.SystemContext
 	cache  types.BlobInfoCache
 	imgsrc types.ImageSource
+	img    types.Image
 }
 
 func (h *proxyHandler) implManifest(w http.ResponseWriter) error {
 	ctx := context.TODO()
-	rawManifest, _, err := h.imgsrc.GetManifest(ctx, nil)
+	rawManifest, _, err := h.img.Manifest(ctx)
 	if err != nil {
 		return err
 	}
@@ -45,22 +45,19 @@ func (h *proxyHandler) implManifest(w http.ResponseWriter) error {
 	if err != nil {
 		return err
 	}
-	w.Header().Add("manifest-digest", digest.String())
-	img, err := image.FromUnparsedImage(ctx, h.sysctx, image.UnparsedInstance(h.imgsrc, nil))
-	if err != nil {
-		return fmt.Errorf("failed to parse manifest for image: %w", err)
-	}
-	config, err := img.OCIConfig(ctx)
+	w.Header().Add("Manifest-Digest", digest.String())
+
+	ociManifest, err := manifest.OCI1FromManifest(rawManifest)
 	if err != nil {
 		return err
 	}
-	out, err := json.Marshal(config)
+	ociSerialized, err := ociManifest.Serialize()
 	if err != nil {
 		return err
 	}
 
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(out)))
-	r := bytes.NewReader(out)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(ociSerialized)))
+	r := bytes.NewReader(ociSerialized)
 	_, err = io.Copy(w, r)
 	if err != nil {
 		return err
@@ -184,6 +181,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	img, err := image.FromUnparsedImage(context.Background(), sysCtx, image.UnparsedInstance(imgsrc, nil))
+	if err != nil {
+		return fmt.Errorf("failed to load image: %w", err)
+	}
 	defer func() {
 		if err := imgsrc.Close(); err != nil {
 			fmt.Fprintf(os.Stderr, "could not close image: %v\n", err)
@@ -191,6 +192,7 @@ func run() error {
 	}()
 
 	handler := &proxyHandler{
+		img:    img,
 		imgsrc: imgsrc,
 		sysctx: sysCtx,
 		cache:  blobinfocache.DefaultCache(sysCtx),
