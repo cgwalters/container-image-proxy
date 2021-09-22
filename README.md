@@ -37,22 +37,25 @@ containers/storage.
 Totally experimental but works.
 
 ```
-$ ./bin/container-image-proxy --port 8080
+$ ./bin/container-image-proxy --port 8080 docker://quay.io/cgwalters/exampleos:latest
 ```
 
 ### Fetch manifest
 
 ```
-$ curl -L http://127.0.0.1:8080/docker.io/library/busybox/manifests/latest | jq .
+$ curl -L http://127.0.0.1:8080/manifest | jq .
 {
   "architecture": "amd64",
   "os": "linux",
 ...
 ```
 
+This will always convert the manifest into OCI format.  The original
+manifest digest is available in a `Manifest-Digest` HTTP header.
+
 ### Fetch a blob
 
 ```
-$ curl -L http://127.0.0.1:8080/docker.io/library/busybox/blobs/sha256:661e87a > layer.tar
+$ curl -L http://127.0.0.1:8080/blobs/sha256:661e87a > layer.tar
 ```
 

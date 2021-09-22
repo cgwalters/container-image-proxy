@@ -10,13 +10,17 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
-	"github.com/containers/image/v5/docker"
 	"github.com/containers/image/v5/image"
 	"github.com/containers/image/v5/manifest"
 	"github.com/containers/image/v5/pkg/blobinfocache"
 	"github.com/containers/image/v5/types"
+
+	// Ensure all transports are registered
+	"github.com/containers/image/v5/transports/alltransports"
+	_ "github.com/containers/image/v5/transports/alltransports"
 	"github.com/opencontainers/go-digest"
 	"github.com/spf13/pflag"
 )
@@ -26,79 +30,66 @@ var quiet bool
 var defaultUserAgent = "ostree-container-backend/" + Version
 
 type proxyHandler struct {
-	cache  types.BlobInfoCache
 	sysctx *types.SystemContext
+	cache  types.BlobInfoCache
+	imgsrc types.ImageSource
 }
 
-func (h *proxyHandler) implRequest(w http.ResponseWriter, imgname, reqtype, ref string) error {
+func (h *proxyHandler) implManifest(w http.ResponseWriter) error {
 	ctx := context.TODO()
-	imgref, err := docker.ParseReference(imgname)
+	rawManifest, _, err := h.imgsrc.GetManifest(ctx, nil)
 	if err != nil {
 		return err
 	}
-	imgsrc, err := imgref.NewImageSource(ctx, h.sysctx)
+	digest, err := manifest.Digest(rawManifest)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := imgsrc.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "could not close image: %v\n", err)
-		}
-	}()
-	if reqtype == "manifests" {
-		rawManifest, _, err := imgsrc.GetManifest(ctx, nil)
-		if err != nil {
-			return err
-		}
-		digest, err := manifest.Digest(rawManifest)
-		if err != nil {
-			return err
-		}
-		w.Header().Add("manifest-digest", digest.String())
-		img, err := image.FromUnparsedImage(ctx, h.sysctx, image.UnparsedInstance(imgsrc, nil))
-		if err != nil {
-			return fmt.Errorf("failed to parse manifest for image: %w", err)
-		}
-		config, err := img.OCIConfig(ctx)
-		if err != nil {
-			return err
-		}
-		out, err := json.Marshal(config)
-		if err != nil {
-			return err
-		}
-
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(out)))
-		r := bytes.NewReader(out)
-		_, err = io.Copy(w, r)
-		if err != nil {
-			return err
-		}
-	} else if reqtype == "blobs" {
-		d, err := digest.Parse(ref)
-		if err != nil {
-			return err
-		}
-		r, blobSize, err := imgsrc.GetBlob(ctx, types.BlobInfo{Digest: d, Size: -1}, h.cache)
-		if err != nil {
-			return err
-		}
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", blobSize))
-		_, err = io.Copy(w, r)
-		if err != nil {
-			return err
-		}
-	} else {
-		return fmt.Errorf("unhandled request %s", reqtype)
+	w.Header().Add("manifest-digest", digest.String())
+	img, err := image.FromUnparsedImage(ctx, h.sysctx, image.UnparsedInstance(h.imgsrc, nil))
+	if err != nil {
+		return fmt.Errorf("failed to parse manifest for image: %w", err)
+	}
+	config, err := img.OCIConfig(ctx)
+	if err != nil {
+		return err
+	}
+	out, err := json.Marshal(config)
+	if err != nil {
+		return err
 	}
 
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(out)))
+	r := bytes.NewReader(out)
+	_, err = io.Copy(w, r)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (h *proxyHandler) implBlob(w http.ResponseWriter, digestStr string) error {
+	ctx := context.TODO()
+	d, err := digest.Parse(digestStr)
+	if err != nil {
+		return err
+	}
+	r, blobSize, err := h.imgsrc.GetBlob(ctx, types.BlobInfo{Digest: d, Size: -1}, h.cache)
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", blobSize))
+	_, err = io.Copy(w, r)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
 // ServeHTTP handles two requests:
 //
-// GET /<host>/<name>/manifests/<reference>
-// GET /<host>/<name>/blobs/<digest>
+// GET /manifest
+// GET /blobs/<digest>
 func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Content-Length", "0")
@@ -112,17 +103,17 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	parts := strings.Split(r.URL.Path, "/")
-	if len(parts) != 6 {
+	var err error
+	if r.URL.Path == "/manifest" {
+		err = h.implManifest(w)
+	} else if strings.HasPrefix(r.URL.Path, "/blobs/") {
+		blob := filepath.Base(r.URL.Path)
+		err = h.implBlob(w, blob)
+	} else {
 		w.Header().Set("Content-Length", "0")
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	imgref := fmt.Sprintf("//%s/%s/%s", parts[1], parts[2], parts[3])
-	reqtype := parts[4]
-	ref := parts[5]
-
-	err := h.implRequest(w, imgref, reqtype, ref)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		if !quiet {
@@ -171,7 +162,6 @@ func run() error {
 	pflag.IntVar(&portNum, "port", -1, "Serve on TCP port (localhost)")
 	pflag.BoolVarP(&quiet, "quiet", "q", false, "Suppress output information when copying images")
 	pflag.BoolVar(&version, "version", false, "show the version ("+Version+")")
-
 	pflag.Parse()
 	if version {
 		fmt.Printf("%s\n", Version)
@@ -182,9 +172,28 @@ func run() error {
 		DockerRegistryUserAgent: defaultUserAgent,
 	}
 
+	args := pflag.Args()
+	if len(args) != 1 {
+		return fmt.Errorf("Exactly one IMAGE is required")
+	}
+	imgRef, err := alltransports.ParseImageName(args[0])
+	if err != nil {
+		return err
+	}
+	imgsrc, err := imgRef.NewImageSource(context.Background(), sysCtx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := imgsrc.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "could not close image: %v\n", err)
+		}
+	}()
+
 	handler := &proxyHandler{
-		cache:  blobinfocache.DefaultCache(sysCtx),
+		imgsrc: imgsrc,
 		sysctx: sysCtx,
+		cache:  blobinfocache.DefaultCache(sysCtx),
 	}
 
 	if sockFd != -1 {
