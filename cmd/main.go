@@ -38,7 +38,11 @@ type proxyHandler struct {
 	img    types.Image
 }
 
-func (h *proxyHandler) implManifest(w http.ResponseWriter) error {
+func (h *proxyHandler) implManifest(w http.ResponseWriter, r *http.Request) error {
+	_, err := io.Copy(io.Discard, r.Body)
+	if err != nil {
+		return err
+	}
 	ctx := context.TODO()
 	rawManifest, _, err := h.img.Manifest(ctx)
 	if err != nil {
@@ -60,27 +64,31 @@ func (h *proxyHandler) implManifest(w http.ResponseWriter) error {
 	}
 
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(ociSerialized)))
-	r := bytes.NewReader(ociSerialized)
-	_, err = io.Copy(w, r)
+	_, err = io.Copy(w, bytes.NewReader(ociSerialized))
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (h *proxyHandler) implBlob(w http.ResponseWriter, digestStr string) error {
+func (h *proxyHandler) implBlob(w http.ResponseWriter, r *http.Request, digestStr string) error {
+	_, err := io.Copy(io.Discard, r.Body)
+	if err != nil {
+		return err
+	}
+
 	ctx := context.TODO()
 	d, err := digest.Parse(digestStr)
 	if err != nil {
 		return err
 	}
-	r, blobSize, err := h.imgsrc.GetBlob(ctx, types.BlobInfo{Digest: d, Size: -1}, h.cache)
+	blobr, blobSize, err := h.imgsrc.GetBlob(ctx, types.BlobInfo{Digest: d, Size: -1}, h.cache)
 	if err != nil {
 		return err
 	}
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", blobSize))
 	verifier := d.Verifier()
-	tr := io.TeeReader(r, verifier)
+	tr := io.TeeReader(blobr, verifier)
 	_, err = io.Copy(w, tr)
 	if err != nil {
 		return err
@@ -109,11 +117,15 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var err error
+	if err != nil {
+
+	}
+
 	if r.URL.Path == "/manifest" {
-		err = h.implManifest(w)
+		err = h.implManifest(w, r)
 	} else if strings.HasPrefix(r.URL.Path, "/blobs/") {
 		blob := filepath.Base(r.URL.Path)
-		err = h.implBlob(w, blob)
+		err = h.implBlob(w, r, blob)
 	} else {
 		w.Header().Set("Content-Length", "0")
 		w.WriteHeader(http.StatusBadRequest)
@@ -206,32 +218,7 @@ func run() error {
 		cache:  blobinfocache.DefaultCache(sysCtx),
 	}
 
-	if sockFd != -1 {
-		fd := os.NewFile(uintptr(sockFd), "sock")
-		defer fd.Close()
-		bufr := bufio.NewReader(fd)
-		bufw := bufio.NewWriter(fd)
-
-		for {
-			req, err := http.ReadRequest(bufr)
-			if err != nil {
-				if err == io.EOF {
-					return nil
-				}
-				return err
-			}
-			resp := SockResponseWriter{
-				out:          bufw,
-				headers:      make(map[string][]string),
-				wroteHeaders: false,
-			}
-			handler.ServeHTTP(resp, req)
-			err = bufw.Flush()
-			if err != nil {
-				return err
-			}
-		}
-	} else {
+	if portNum != -1 {
 		var listener net.Listener
 		addr := net.TCPAddr{
 			IP:   net.ParseIP("127.0.0.1"),
@@ -250,9 +237,36 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("failed to serve: %w", err)
 		}
+		return nil
 	}
 
-	return nil
+	var buf *bufio.ReadWriter
+	if sockFd != -1 {
+		fd := os.NewFile(uintptr(sockFd), "sock")
+		buf = bufio.NewReadWriter(bufio.NewReader(fd), bufio.NewWriter(fd))
+	} else {
+		buf = bufio.NewReadWriter(bufio.NewReader(os.Stdin), bufio.NewWriter(os.Stdout))
+	}
+
+	for {
+		req, err := http.ReadRequest(buf.Reader)
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		resp := SockResponseWriter{
+			out:          buf,
+			headers:      make(map[string][]string),
+			wroteHeaders: false,
+		}
+		handler.ServeHTTP(resp, req)
+		err = buf.Flush()
+		if err != nil {
+			return err
+		}
+	}
 }
 
 func main() {
