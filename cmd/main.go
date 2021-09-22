@@ -12,6 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	_ "crypto/sha256"
+	_ "crypto/sha512"
+
 	"github.com/containers/image/v5/image"
 	"github.com/containers/image/v5/manifest"
 	"github.com/containers/image/v5/pkg/blobinfocache"
@@ -76,9 +79,14 @@ func (h *proxyHandler) implBlob(w http.ResponseWriter, digestStr string) error {
 		return err
 	}
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", blobSize))
-	_, err = io.Copy(w, r)
+	verifier := d.Verifier()
+	tr := io.TeeReader(r, verifier)
+	_, err = io.Copy(w, tr)
 	if err != nil {
 		return err
+	}
+	if !verifier.Verified() {
+		return fmt.Errorf("Corrupted blob, expecting %s", d.String())
 	}
 	return nil
 }
