@@ -64,6 +64,7 @@ func (h *proxyHandler) implManifest(w http.ResponseWriter, r *http.Request) erro
 	}
 
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(ociSerialized)))
+	w.WriteHeader(200)
 	_, err = io.Copy(w, bytes.NewReader(ociSerialized))
 	if err != nil {
 		return err
@@ -87,6 +88,8 @@ func (h *proxyHandler) implBlob(w http.ResponseWriter, r *http.Request, digestSt
 		return err
 	}
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", blobSize))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.WriteHeader(200)
 	verifier := d.Verifier()
 	tr := io.TeeReader(blobr, verifier)
 	_, err = io.Copy(w, tr)
@@ -144,7 +147,6 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type SockResponseWriter struct {
 	out          io.Writer
 	headers      http.Header
-	wroteHeaders bool
 }
 
 func (rw SockResponseWriter) Header() http.Header {
@@ -152,17 +154,11 @@ func (rw SockResponseWriter) Header() http.Header {
 }
 
 func (rw SockResponseWriter) Write(buf []byte) (int, error) {
-	if !rw.wroteHeaders {
-		rw.WriteHeader(200)
-	}
 	return rw.out.Write(buf)
 }
 
 func (rw SockResponseWriter) WriteHeader(statusCode int) {
-	if rw.wroteHeaders {
-		panic("Already invoked WriteHeader")
-	}
-	rw.wroteHeaders = true
+	fmt.Fprintf(os.Stderr, "rw %v writing headers\n", rw)
 	rw.out.Write([]byte(fmt.Sprintf("HTTP/1.1 %d OK\r\n", statusCode)))
 	rw.headers.Write(rw.out)
 	rw.out.Write([]byte("\r\n"))
@@ -259,7 +255,6 @@ func run() error {
 		resp := SockResponseWriter{
 			out:          buf,
 			headers:      make(map[string][]string),
-			wroteHeaders: false,
 		}
 		handler.ServeHTTP(resp, req)
 		err = buf.Flush()
