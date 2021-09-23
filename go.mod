@@ -1,4 +1,4 @@
-module github.com/cgwalters/ostree-container-backend
+module github.com/cgwalters/container-image-proxy
 
 go 1.16
 
