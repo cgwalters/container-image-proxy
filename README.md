@@ -47,6 +47,22 @@ that will impose a maintenance burden to replicate:
 We have a 0.1 release that works.  However, in the future this will hopefully
 move into [skopeo](https://github.com/containers/skopeo/).
 
+# Usage
+
+The intended production use of this is:
+
+- Parent process creates a [socketpair](https://man7.org/linux/man-pages/man2/socketpair.2.html) (e.g. [Rust tokio](https://docs.rs/tokio/1.12.0/tokio/net/struct.UnixStream.html#method.pair))
+- Parent passes one half of socketpair to child via e.g. fd 3 - `container-image-proxy --sockfd 3 docker://quay.io/cgwalters/exampleos:latest`
+- Parent makes HTTP (1.1) requests on its half of the socketpair
+
+## Usage example via localhost TCP
+
+The key advantage of using `socketpair()` is that communication is private
+between the two processes - and you don't have to worry about the usual things
+like TCP port conflicts/assignments.
+
+However, it's easiest to demo this CLI by listening on a local TCP port:
+
 ```
 $ ./bin/container-image-proxy --port 8080 docker://quay.io/cgwalters/exampleos:latest
 ```
