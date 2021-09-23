@@ -19,8 +19,8 @@ where we're using container images to encapsulate host operating system
 updates, but we don't want to involve the [containers/image](github.com/containers/image/)
 storage layer.
 
-What we *do* want from the containers ecosystem is support for things like
-signatures and offline mirroring.
+What we *do* want from the containers/image library is support for things like
+signatures and offline mirroring.  More on this below.
 
 Forgetting things like ostree exist for a second - imagine that you wanted to 
 encapsulate a set of Debian/RPM/etc packages inside
@@ -32,9 +32,20 @@ Another theoretical use case could be something like [krustlet](https://github.c
 which fetches WebAssembly blobs inside containers.  Here again, we don't want to involve
 containers/storage.
 
+# Desired containers/image features
+
+There are e.g. Rust libraries like [dkregistry-rs](https://github.com/camallo/dkregistry-rs), and
+similar for other languages.  However, the containers/image Go library has a lot of additional infrastructure
+that will impose a maintenance burden to replicate:
+
+ - Signatures (`man containers-auth.json`)
+ - Mirroring/renaming (`man containers-registries.conf`)
+ - Support for `~/.docker/config.json` for authentication as well as `/run`
+
 # Status
 
-Totally experimental but works.
+We have a 0.1 release that works.  However, in the future this will hopefully
+move into [skopeo](https://github.com/containers/skopeo/).
 
 ```
 $ ./bin/container-image-proxy --port 8080 docker://quay.io/cgwalters/exampleos:latest
