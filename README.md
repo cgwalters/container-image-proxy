@@ -55,6 +55,21 @@ The intended production use of this is:
 - Parent passes one half of socketpair to child via e.g. fd 3 - `container-image-proxy --sockfd 3 docker://quay.io/cgwalters/exampleos:latest`
 - Parent makes HTTP (1.1) requests on its half of the socketpair
 
+# APIs
+
+### `GET /manifest`
+
+Returns the manifest converted into OCI format, plus the original manifest digest in a
+`Manifest-Digest` header.
+
+At the moment, when presented with an [image index](https://github.com/opencontainers/image-spec/blob/main/image-index.md)
+AKA "manifest list", this request will choose the image matching the current operating system and processor.
+
+### `GET /blobs/<digest>`
+
+Fetch a blob as is - no decompression is performed if relevant.
+The digest will be verified.
+
 ## Python demo code
 
 See [demo.py](demo.py).
