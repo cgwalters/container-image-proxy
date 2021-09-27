@@ -17,11 +17,8 @@ import (
 	"github.com/containers/image/v5/image"
 	"github.com/containers/image/v5/manifest"
 	"github.com/containers/image/v5/pkg/blobinfocache"
-	"github.com/containers/image/v5/types"
-
-	// Ensure all transports are registered
 	"github.com/containers/image/v5/transports/alltransports"
-	_ "github.com/containers/image/v5/transports/alltransports"
+	"github.com/containers/image/v5/types"
 	"github.com/opencontainers/go-digest"
 	"github.com/spf13/pflag"
 )
