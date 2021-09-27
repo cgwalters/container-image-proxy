@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -145,8 +144,8 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type SockResponseWriter struct {
-	out          io.Writer
-	headers      http.Header
+	out     io.Writer
+	headers http.Header
 }
 
 func (rw SockResponseWriter) Header() http.Header {
@@ -158,7 +157,6 @@ func (rw SockResponseWriter) Write(buf []byte) (int, error) {
 }
 
 func (rw SockResponseWriter) WriteHeader(statusCode int) {
-	fmt.Fprintf(os.Stderr, "rw %v writing headers\n", rw)
 	rw.out.Write([]byte(fmt.Sprintf("HTTP/1.1 %d OK\r\n", statusCode)))
 	rw.headers.Write(rw.out)
 	rw.out.Write([]byte("\r\n"))
@@ -167,12 +165,10 @@ func (rw SockResponseWriter) WriteHeader(statusCode int) {
 func run() error {
 	var version bool
 	var sockFd int
-	var portNum int
 
 	var err error
 
 	pflag.IntVar(&sockFd, "sockfd", -1, "Serve on opened socket pair")
-	pflag.IntVar(&portNum, "port", -1, "Serve on TCP port (localhost)")
 	pflag.BoolVarP(&quiet, "quiet", "q", false, "Suppress output information when copying images")
 	pflag.BoolVar(&version, "version", false, "show the version ("+Version+")")
 	pflag.Parse()
@@ -214,28 +210,6 @@ func run() error {
 		cache:  blobinfocache.DefaultCache(sysCtx),
 	}
 
-	if portNum != -1 {
-		var listener net.Listener
-		addr := net.TCPAddr{
-			IP:   net.ParseIP("127.0.0.1"),
-			Port: portNum,
-			Zone: "",
-		}
-		listener, err = net.ListenTCP("tcp", &addr)
-		if err != nil {
-			return err
-		}
-		defer listener.Close()
-		srv := &http.Server{
-			Handler: handler,
-		}
-		err = srv.Serve(listener)
-		if err != nil {
-			return fmt.Errorf("failed to serve: %w", err)
-		}
-		return nil
-	}
-
 	var buf *bufio.ReadWriter
 	if sockFd != -1 {
 		fd := os.NewFile(uintptr(sockFd), "sock")
@@ -253,8 +227,8 @@ func run() error {
 			return err
 		}
 		resp := SockResponseWriter{
-			out:          buf,
-			headers:      make(map[string][]string),
+			out:     buf,
+			headers: make(map[string][]string),
 		}
 		handler.ServeHTTP(resp, req)
 		err = buf.Flush()

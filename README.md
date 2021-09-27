@@ -55,34 +55,6 @@ The intended production use of this is:
 - Parent passes one half of socketpair to child via e.g. fd 3 - `container-image-proxy --sockfd 3 docker://quay.io/cgwalters/exampleos:latest`
 - Parent makes HTTP (1.1) requests on its half of the socketpair
 
-## Usage example via localhost TCP
+## Python demo code
 
-The key advantage of using `socketpair()` is that communication is private
-between the two processes - and you don't have to worry about the usual things
-like TCP port conflicts/assignments.
-
-However, it's easiest to demo this CLI by listening on a local TCP port:
-
-```
-$ ./bin/container-image-proxy --port 8080 docker://quay.io/cgwalters/exampleos:latest
-```
-
-### Fetch manifest
-
-```
-$ curl -L http://127.0.0.1:8080/manifest | jq .
-{
-  "architecture": "amd64",
-  "os": "linux",
-...
-```
-
-This will always convert the manifest into OCI format.  The original
-manifest digest is available in a `Manifest-Digest` HTTP header.
-
-### Fetch a blob
-
-```
-$ curl -L http://127.0.0.1:8080/blobs/sha256:661e87a > layer.tar
-```
-
+See [demo.py](demo.py).
