@@ -28,19 +28,46 @@ var quiet bool
 var defaultUserAgent = "ostree-container-backend/" + Version
 
 type proxyHandler struct {
-	sysctx *types.SystemContext
-	cache  types.BlobInfoCache
-	imgsrc types.ImageSource
-	img    types.Image
+	imageref string
+	sysctx   *types.SystemContext
+	cache    types.BlobInfoCache
+	imgsrc   *types.ImageSource
+	img      *types.Image
+	shutdown bool
+}
+
+func (h *proxyHandler) ensureImage() error {
+	if h.img != nil {
+		return nil
+	}
+	imgRef, err := alltransports.ParseImageName(h.imageref)
+	if err != nil {
+		return err
+	}
+	imgsrc, err := imgRef.NewImageSource(context.Background(), h.sysctx)
+	if err != nil {
+		return err
+	}
+	img, err := image.FromUnparsedImage(context.Background(), h.sysctx, image.UnparsedInstance(imgsrc, nil))
+	if err != nil {
+		return fmt.Errorf("failed to load image: %w", err)
+	}
+	h.img = &img
+	h.imgsrc = &imgsrc
+	return nil
 }
 
 func (h *proxyHandler) implManifest(w http.ResponseWriter, r *http.Request) error {
+	if err := h.ensureImage(); err != nil {
+		return err
+	}
+
 	_, err := io.Copy(io.Discard, r.Body)
 	if err != nil {
 		return err
 	}
 	ctx := context.TODO()
-	rawManifest, _, err := h.img.Manifest(ctx)
+	rawManifest, _, err := (*h.img).Manifest(ctx)
 	if err != nil {
 		return err
 	}
@@ -69,6 +96,10 @@ func (h *proxyHandler) implManifest(w http.ResponseWriter, r *http.Request) erro
 }
 
 func (h *proxyHandler) implBlob(w http.ResponseWriter, r *http.Request, digestStr string) error {
+	if err := h.ensureImage(); err != nil {
+		return err
+	}
+
 	_, err := io.Copy(io.Discard, r.Body)
 	if err != nil {
 		return err
@@ -79,7 +110,7 @@ func (h *proxyHandler) implBlob(w http.ResponseWriter, r *http.Request, digestSt
 	if err != nil {
 		return err
 	}
-	blobr, blobSize, err := h.imgsrc.GetBlob(ctx, types.BlobInfo{Digest: d, Size: -1}, h.cache)
+	blobr, blobSize, err := (*h.imgsrc).GetBlob(ctx, types.BlobInfo{Digest: d, Size: -1}, h.cache)
 	if err != nil {
 		return err
 	}
@@ -102,7 +133,17 @@ func (h *proxyHandler) implBlob(w http.ResponseWriter, r *http.Request, digestSt
 //
 // GET /manifest
 // GET /blobs/<digest>
+// POST /quit
 func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		if r.URL.Path == "/quit" {
+			w.Header().Set("Content-Length", "0")
+			w.WriteHeader(200)
+			h.shutdown = true
+			return
+		}
+	}
+
 	if r.Method != http.MethodGet {
 		w.Header().Set("Content-Length", "0")
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -163,8 +204,6 @@ func run() error {
 	var version bool
 	var sockFd int
 
-	var err error
-
 	pflag.IntVar(&sockFd, "sockfd", -1, "Serve on opened socket pair")
 	pflag.BoolVarP(&quiet, "quiet", "q", false, "Suppress output information when copying images")
 	pflag.BoolVar(&version, "version", false, "show the version ("+Version+")")
@@ -182,29 +221,11 @@ func run() error {
 	if len(args) != 1 {
 		return fmt.Errorf("Exactly one IMAGE is required")
 	}
-	imgRef, err := alltransports.ParseImageName(args[0])
-	if err != nil {
-		return err
-	}
-	imgsrc, err := imgRef.NewImageSource(context.Background(), sysCtx)
-	if err != nil {
-		return err
-	}
-	img, err := image.FromUnparsedImage(context.Background(), sysCtx, image.UnparsedInstance(imgsrc, nil))
-	if err != nil {
-		return fmt.Errorf("failed to load image: %w", err)
-	}
-	defer func() {
-		if err := imgsrc.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "could not close image: %v\n", err)
-		}
-	}()
 
 	handler := &proxyHandler{
-		img:    img,
-		imgsrc: imgsrc,
-		sysctx: sysCtx,
-		cache:  blobinfocache.DefaultCache(sysCtx),
+		imageref: args[0],
+		sysctx:   sysCtx,
+		cache:    blobinfocache.DefaultCache(sysCtx),
 	}
 
 	var buf *bufio.ReadWriter
@@ -232,7 +253,19 @@ func run() error {
 		if err != nil {
 			return err
 		}
+
+		if handler.shutdown {
+			break
+		}
 	}
+
+	if handler.img != nil {
+		if err := (*handler.imgsrc).Close(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func main() {

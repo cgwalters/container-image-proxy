@@ -32,3 +32,11 @@ for layer in manifest["layers"]:
     # Could fetch the layer as a tarball via:
     # myconn.request('GET', '/blobs/{digest})
     # ... do something with myconn.getresponse() ...
+
+myconn.request('POST', '/quit')
+resp = myconn.getresponse()
+print(resp.status, resp.reason)
+mysock.close()
+r = child.wait()
+if r != 0:
+    raise SystemExit("container-image-proxy failed with code {r}")

@@ -70,6 +70,10 @@ AKA "manifest list", this request will choose the image matching the current ope
 Fetch a blob as is - no decompression is performed if relevant.
 The digest will be verified.
 
+### POST `/quit`
+
+Gracefully shut down the server and exit the process.
+
 ## Python demo code
 
 See [demo.py](demo.py).
