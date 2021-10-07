@@ -3,6 +3,7 @@ module github.com/cgwalters/container-image-proxy
 go 1.16
 
 require (
+	github.com/godbus/dbus/v5 v5.0.5
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
 	github.com/containers/common v0.44.1 // indirect
 	github.com/containers/image/v5 v5.16.0

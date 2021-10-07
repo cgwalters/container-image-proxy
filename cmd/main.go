@@ -1,15 +1,14 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
-	"path/filepath"
-	"strings"
+	"path"
 
 	_ "crypto/sha256"
 	_ "crypto/sha512"
@@ -25,7 +24,7 @@ import (
 
 var Version = ""
 var quiet bool
-var defaultUserAgent = "ostree-container-backend/" + Version
+var defaultUserAgent = "cgwalters/container-image-proxy/" + Version
 
 type proxyHandler struct {
 	imageref string
@@ -55,6 +54,17 @@ func (h *proxyHandler) ensureImage() error {
 	h.img = &img
 	h.imgsrc = &imgsrc
 	return nil
+}
+
+type handlerFuncError func(http.ResponseWriter, *http.Request) error
+
+func wrapServeFuncForError(f handlerFuncError) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		err := f(w, r)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+		}
+	}
 }
 
 func (h *proxyHandler) implManifest(w http.ResponseWriter, r *http.Request) error {
@@ -87,15 +97,11 @@ func (h *proxyHandler) implManifest(w http.ResponseWriter, r *http.Request) erro
 	}
 
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(ociSerialized)))
-	w.WriteHeader(200)
 	_, err = io.Copy(w, bytes.NewReader(ociSerialized))
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
-func (h *proxyHandler) implBlob(w http.ResponseWriter, r *http.Request, digestStr string) error {
+func (h *proxyHandler) implBlob(w http.ResponseWriter, r *http.Request) error {
 	if err := h.ensureImage(); err != nil {
 		return err
 	}
@@ -104,6 +110,8 @@ func (h *proxyHandler) implBlob(w http.ResponseWriter, r *http.Request, digestSt
 	if err != nil {
 		return err
 	}
+
+	digestStr := path.Base(r.URL.Path)
 
 	ctx := context.TODO()
 	d, err := digest.Parse(digestStr)
@@ -114,9 +122,10 @@ func (h *proxyHandler) implBlob(w http.ResponseWriter, r *http.Request, digestSt
 	if err != nil {
 		return err
 	}
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", blobSize))
+	if blobSize != -1 {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", blobSize))
+	}
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.WriteHeader(200)
 	verifier := d.Verifier()
 	tr := io.TeeReader(blobr, verifier)
 	_, err = io.Copy(w, tr)
@@ -129,82 +138,38 @@ func (h *proxyHandler) implBlob(w http.ResponseWriter, r *http.Request, digestSt
 	return nil
 }
 
-// ServeHTTP handles two requests:
-//
-// GET /manifest
-// GET /blobs/<digest>
-// POST /quit
-func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost {
-		if r.URL.Path == "/quit" {
-			w.Header().Set("Content-Length", "0")
-			w.WriteHeader(200)
-			h.shutdown = true
-			return
-		}
-	}
-
-	if r.Method != http.MethodGet {
-		w.Header().Set("Content-Length", "0")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	if r.URL.Path == "" || !strings.HasPrefix(r.URL.Path, "/") {
-		w.Header().Set("Content-Length", "0")
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	var err error
-	if err != nil {
-
-	}
-
-	if r.URL.Path == "/manifest" {
-		err = h.implManifest(w, r)
-	} else if strings.HasPrefix(r.URL.Path, "/blobs/") {
-		blob := filepath.Base(r.URL.Path)
-		err = h.implBlob(w, r, blob)
-	} else {
-		w.Header().Set("Content-Length", "0")
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		if !quiet {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
-		}
-		w.Write([]byte(err.Error()))
-		return
-	}
+type dummyListener struct {
+	sock *net.Conn
 }
 
-type SockResponseWriter struct {
-	out     io.Writer
-	headers http.Header
+func (l dummyListener) Accept() (net.Conn, error) {
+	if l.sock != nil {
+		return *l.sock, nil
+	}
+	return nil, fmt.Errorf("closed")
 }
 
-func (rw SockResponseWriter) Header() http.Header {
-	return rw.headers
+func (l dummyListener) Close() error {
+	if l.sock != nil {
+		err := (*l.sock).Close()
+		l.sock = nil
+		return err
+	}
+	return nil
 }
 
-func (rw SockResponseWriter) Write(buf []byte) (int, error) {
-	return rw.out.Write(buf)
-}
-
-func (rw SockResponseWriter) WriteHeader(statusCode int) {
-	rw.out.Write([]byte(fmt.Sprintf("HTTP/1.1 %d OK\r\n", statusCode)))
-	rw.headers.Write(rw.out)
-	rw.out.Write([]byte("\r\n"))
+func (l dummyListener) Addr() net.Addr {
+	if l.sock != nil {
+		return (*l.sock).LocalAddr()
+	}
+	return &net.IPAddr{}
 }
 
 func run() error {
 	var version bool
 	var sockFd int
 
-	pflag.IntVar(&sockFd, "sockfd", -1, "Serve on opened socket pair")
+	pflag.IntVar(&sockFd, "sockfd", -1, "Serve on opened socket pair on this file decscriptor")
 	pflag.BoolVarP(&quiet, "quiet", "q", false, "Suppress output information when copying images")
 	pflag.BoolVar(&version, "version", false, "show the version ("+Version+")")
 	pflag.Parse()
@@ -222,50 +187,43 @@ func run() error {
 		return fmt.Errorf("Exactly one IMAGE is required")
 	}
 
+	if sockFd == -1 {
+		return fmt.Errorf("--sockfd is required")
+	}
+
 	handler := &proxyHandler{
 		imageref: args[0],
 		sysctx:   sysCtx,
 		cache:    blobinfocache.DefaultCache(sysCtx),
 	}
 
-	var buf *bufio.ReadWriter
-	if sockFd != -1 {
-		fd := os.NewFile(uintptr(sockFd), "sock")
-		buf = bufio.NewReadWriter(bufio.NewReader(fd), bufio.NewWriter(fd))
-	} else {
-		buf = bufio.NewReadWriter(bufio.NewReader(os.Stdin), bufio.NewWriter(os.Stdout))
+	fd := os.NewFile(uintptr(sockFd), "sock")
+	fdconn, err := net.FileConn(fd)
+	if err != nil {
+		return err
 	}
 
-	for {
-		req, err := http.ReadRequest(buf.Reader)
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return err
-		}
-		resp := SockResponseWriter{
-			out:     buf,
-			headers: make(map[string][]string),
-		}
-		handler.ServeHTTP(resp, req)
-		err = buf.Flush()
-		if err != nil {
-			return err
-		}
-
-		if handler.shutdown {
-			break
-		}
+	mux := http.NewServeMux()
+	server := http.Server{
+		Handler: mux,
 	}
 
-	if handler.img != nil {
-		if err := (*handler.imgsrc).Close(); err != nil {
-			return err
+	mux.HandleFunc("/manifest", wrapServeFuncForError(handler.implManifest))
+	mux.HandleFunc("/blobs", wrapServeFuncForError(handler.implBlob))
+	mux.HandleFunc("/quit", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
 		}
-	}
+		w.Write([]byte("OK"))
+		os.Exit(0)
+	})
 
-	return nil
+	listener := dummyListener{
+		sock: &fdconn,
+	}
+	// Note ordinarily, we expect to exit via /quit
+	return server.Serve(listener)
 }
 
 func main() {
