@@ -1,3 +1,5 @@
+# Some issue on f35 generating empty files list
+%global debug_package %{nil}
 %global goipath         github.com/cgwalters/container-image-proxy
 %global gomodulesmode   GO111MODULE=on
 Version:                0.1
