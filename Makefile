@@ -11,3 +11,6 @@ vendor:
 	@go mod vendor
 	@go mod tidy
 .PHONY: vendor 
+
+install:
+	install -m 0755 -D -t $(DESTDIR)$(PREFIX)/usr/bin bin/container-image-proxy
