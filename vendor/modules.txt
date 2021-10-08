@@ -186,6 +186,7 @@ github.com/docker/go-units
 github.com/ghodss/yaml
 # github.com/godbus/dbus/v5 v5.0.5
 ## explicit
+github.com/godbus/dbus/v5
 # github.com/gogo/protobuf v1.3.2
 github.com/gogo/protobuf/gogoproto
 github.com/gogo/protobuf/proto
